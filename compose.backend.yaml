@@ -1,0 +1,31 @@
+name: trifobet-practica
+services:
+  backend:
+    image: sunner01/trifobet-backend:practica
+    build:
+      context: ./trifobet-backend
+      dockerfile: Dockerfile
+    env_file:
+      - path: ./trifobet-backend/.env
+        format: raw
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - backend-data:/app/.data
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.setTimeout(3000,()=>process.exit(1));s.on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+volumes:
+  backend-data:

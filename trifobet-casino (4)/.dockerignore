@@ -1,0 +1,14 @@
+node_modules
+.next
+.vercel
+.git
+.env
+.env.*
+dist
+out
+coverage
+backend
+frontend
+*.log
+*.pem
+*.key
