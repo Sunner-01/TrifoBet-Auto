@@ -214,3 +214,6 @@ trifobet-backend/.data/
 # Documentacion local: no publicar en esta entrega
 *.md
 *.MD
+
+# Certificado CA publico requerido por el Dockerfile del backend
+!trifobet-backend/supabase-root-ca.crt
