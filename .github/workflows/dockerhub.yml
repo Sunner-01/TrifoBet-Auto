@@ -1,0 +1,77 @@
+name: "sunner01:despliegue docker con framework"
+run-name: "sunner01:despliegue docker con framework - TrifoBet"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trifobet-dockerhub-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publicar ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: ./trifobet-backend
+            repository: trifobet-backend
+          - service: web
+            context: ./trifobet-casino (4)
+            repository: trifobet-web
+          - service: admin
+            context: ./TrifoBetAdmin
+            repository: trifobet-admin
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v6
+
+      - name: Validar secretos
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          test -n "$DOCKER_USERNAME" || { echo "Falta DOCKER_USERNAME"; exit 1; }
+          test -n "$DOCKER_PASSWORD" || { echo "Falta DOCKER_PASSWORD (token de Docker Hub)"; exit 1; }
+
+      - name: Crear repositorio Docker Hub si falta
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_REPOSITORY: ${{ matrix.repository }}
+        run: python3 scripts/ensure-dockerhub-repository.py
+
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Iniciar sesion Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Construir y publicar imagen
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.repository }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.repository }}:practica
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.repository }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
