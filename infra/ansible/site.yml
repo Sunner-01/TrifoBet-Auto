@@ -1,0 +1,248 @@
+---
+- name: Configurar y desplegar TrifoBet
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    app_dir: /opt/trifobet
+    app_tag: "{{ lookup('ansible.builtin.env', 'APP_TAG') }}"
+    backend_env: "{{ lookup('ansible.builtin.env', 'BACKEND_ENV') }}"
+    docker_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+  tasks:
+    - name: Verificar Ubuntu y secretos
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version is version('24.04', '>=')
+          - app_tag | length > 0
+          - backend_env | length > 0
+        fail_msg: La VM debe usar Ubuntu 24.04 y recibir las variables del backend.
+      no_log: true
+
+    - name: Instalar herramientas base
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, git, iptables, python3-apt]
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 300
+        state: present
+
+    - name: Crear directorio de claves APT
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Descargar clave oficial de Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Agregar repositorio oficial de Docker
+      ansible.builtin.apt_repository:
+        repo: 'deb [arch={{ docker_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable'
+        filename: docker
+        state: present
+
+    - name: Instalar Docker y Compose
+      ansible.builtin.apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+        update_cache: true
+        lock_timeout: 300
+        state: present
+
+    - name: Iniciar Docker al arrancar
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Instalar reglas persistentes para 80 y 443
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/trifobet-firewall
+        mode: '0755'
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for port in 80 443; do
+            /usr/sbin/iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
+              /usr/sbin/iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT
+          done
+
+    - name: Registrar servicio de firewall
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/trifobet-firewall.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=TrifoBet inbound web ports
+          After=network-pre.target
+          Before=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/sbin/trifobet-firewall
+
+          [Install]
+          WantedBy=multi-user.target
+      register: firewall_unit
+
+    - name: Recargar systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: firewall_unit.changed
+
+    - name: Activar firewall al arrancar
+      ansible.builtin.systemd_service:
+        name: trifobet-firewall
+        enabled: true
+        state: started
+
+    - name: Aplicar reglas de red ahora
+      ansible.builtin.command: /usr/local/sbin/trifobet-firewall
+      changed_when: false
+
+    - name: Crear directorio de la aplicación
+      ansible.builtin.file:
+        path: '{{ app_dir }}'
+        state: directory
+        mode: '0755'
+
+    - name: Guardar variables de Compose
+      ansible.builtin.copy:
+        dest: '{{ app_dir }}/.env'
+        mode: '0600'
+        content: |
+          APP_TAG={{ app_tag }}
+
+    - name: Guardar secretos del backend
+      ansible.builtin.copy:
+        dest: '{{ app_dir }}/backend.env'
+        mode: '0600'
+        content: '{{ backend_env }}'
+      no_log: true
+
+    - name: Instalar Compose de producción
+      ansible.builtin.copy:
+        dest: '{{ app_dir }}/compose.yaml'
+        mode: '0644'
+        content: |
+          name: trifobet
+          services:
+            backend:
+              image: sunner01/trifobet-backend:${APP_TAG}
+              env_file:
+                - path: ./backend.env
+                  format: raw
+              environment:
+                NODE_ENV: production
+                PORT: '3000'
+              volumes:
+                - backend-data:/app/.data
+              restart: unless-stopped
+              healthcheck:
+                test: ['CMD', 'node', '-e', "const s=require('net').connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.setTimeout(3000,()=>process.exit(1));s.on('error',()=>process.exit(1))"]
+                interval: 15s
+                timeout: 5s
+                retries: 5
+                start_period: 40s
+            web:
+              image: sunner01/trifobet-web:${APP_TAG}
+              environment:
+                INTERNAL_API_URL: http://backend:3000
+              depends_on:
+                backend:
+                  condition: service_healthy
+              restart: unless-stopped
+            admin:
+              image: sunner01/trifobet-admin:${APP_TAG}
+              environment:
+                INTERNAL_API_URL: http://backend:3000
+              depends_on:
+                backend:
+                  condition: service_healthy
+              restart: unless-stopped
+            caddy:
+              image: caddy:2-alpine
+              ports: ['80:80', '443:443']
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - caddy-data:/data
+              depends_on: [web, admin]
+              restart: unless-stopped
+            cloudflared:
+              image: cloudflare/cloudflared:latest
+              network_mode: host
+              command: tunnel --no-autoupdate --url http://127.0.0.1:80
+              depends_on: [caddy]
+              restart: unless-stopped
+          volumes:
+            backend-data:
+            caddy-data:
+
+    - name: Configurar proxy HTTP y HTTPS
+      ansible.builtin.copy:
+        dest: '{{ app_dir }}/Caddyfile'
+        mode: '0644'
+        content: |
+          (trifobet_routes) {
+            encode zstd gzip
+            handle_path /api/* {
+              reverse_proxy backend:3000
+            }
+            handle /socket.io/* {
+              reverse_proxy backend:3000
+            }
+            handle /admin* {
+              reverse_proxy admin:3000
+            }
+            handle {
+              reverse_proxy web:3000
+            }
+          }
+          :80 {
+            import trifobet_routes
+          }
+          :443 {
+            tls internal
+            import trifobet_routes
+          }
+
+    - name: Descargar imágenes
+      ansible.builtin.command: docker compose pull
+      args:
+        chdir: '{{ app_dir }}'
+      changed_when: true
+
+    - name: Iniciar contenedores
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args:
+        chdir: '{{ app_dir }}'
+      changed_when: true
+
+    - name: Verificar acceso local
+      ansible.builtin.uri:
+        url: http://127.0.0.1/api/pais
+        status_code: 200
+      register: api_response
+      retries: 15
+      delay: 5
+      until: api_response.status == 200
+
+    - name: Leer URL temporal de Cloudflare
+      ansible.builtin.shell: >-
+        docker compose logs --no-color cloudflared 2>&1 |
+        grep -oE 'https://[a-z0-9-]+[.]trycloudflare[.]com' | tail -n 1
+      args:
+        chdir: '{{ app_dir }}'
+      register: tunnel_url
+      changed_when: false
+      retries: 20
+      delay: 3
+      until: tunnel_url.stdout | length > 0
+
+    - name: Mostrar URL del despliegue
+      ansible.builtin.debug:
+        msg: 'TrifoBet: {{ tunnel_url.stdout }} | Admin: {{ tunnel_url.stdout }}/admin'

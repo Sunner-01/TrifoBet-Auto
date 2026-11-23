@@ -6,12 +6,13 @@
  * estadísticas vacías y formateo de apuesta.
  */
 
-import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 
-import { ApuestasDeportivasService } from '../../src/apuestas-deportivas/apuestas-deportivas.service';
+import { ApuestasCoreService } from '../../src/apuestas-deportivas/services/apuestas-core.service';
+import { ApuestasQueryService } from '../../src/apuestas-deportivas/services/apuestas-query.service';
+import { ApuestasSimuladorService } from '../../src/apuestas-deportivas/services/apuestas-simulador.service';
 import {
   CrearApuestaDto,
   TipoApuesta,
@@ -31,25 +32,21 @@ const seleccionBase = {
 };
 
 describe('ApuestasDeportivasService — Pruebas Unitarias', () => {
-  let service: ApuestasDeportivasService;
+  let service: ApuestasCoreService;
+  let queryService: ApuestasQueryService;
   let mockSupabase: ReturnType<typeof createMockSupabaseClient>;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     mockSupabase = createMockSupabaseClient();
     (createClient as jest.Mock).mockReturnValue(mockSupabase);
 
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        ApuestasDeportivasService,
-        {
-          provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue('test-value') },
-        },
-      ],
-    }).compile();
-
-    service = module.get<ApuestasDeportivasService>(ApuestasDeportivasService);
-    (service as any).supabase = mockSupabase;
+    const config = { get: jest.fn().mockReturnValue('test-value') } as unknown as ConfigService;
+    queryService = new ApuestasQueryService(config);
+    service = new ApuestasCoreService(
+      config,
+      { programarSimulacion: jest.fn() } as unknown as ApuestasSimuladorService,
+      queryService,
+    );
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -75,50 +72,24 @@ describe('ApuestasDeportivasService — Pruebas Unitarias', () => {
 
   // ── CASO 19: cuota total = producto de cuotas individuales ────────────────
   it('crearApuesta() debe calcular la cuota total como el producto de cuotas individuales', async () => {
-    // Saldo suficiente
-    mockSupabase.single.mockResolvedValue({
-      data: { id: 1, eventoId: 10 },
-      error: null,
+    mockSupabase._setSingleResult({
+      id: 99, usuario_id: 1, tipo: 'combinada', monto: '50',
+      cuota_total: '3.6', ganancia_potencial: '180', estado: 'pendiente',
     });
-    mockSupabase._setThenResult([{ id: 1 }, { id: 2 }]); // eventos válidos
-    // usuario con saldo
-    mockSupabase.single
-      .mockResolvedValueOnce({ data: { saldo: 1000 }, error: null }) // saldo usuario
-      .mockResolvedValueOnce({ data: null, error: null }) // update saldo
-      .mockResolvedValueOnce({
-        data: {
-          id: 99,
-          usuario_id: 1,
-          tipo: 'combinada',
-          monto: 50,
-          cuota_total: 3.6,
-          ganancia_potencial: 180,
-          estado: 'pendiente',
-          fecha_creacion: new Date().toISOString(),
-          fecha_procesado: null,
-        },
-        error: null,
-      }); // apuesta creada
-
-    const dto: CrearApuestaDto = {
-      tipo: TipoApuesta.COMBINADA,
-      monto: 50,
-      selecciones: [
-        { ...seleccionBase, eventoId: 1, cuota: 2.0 },
-        { ...seleccionBase, eventoId: 2, cuota: 1.8 },
-      ],
-    };
-
-    // Cuota total esperada = 2.0 * 1.8 = 3.6
-    const cuotaTotal = dto.selecciones.reduce((acc, s) => acc * s.cuota, 1);
-    expect(parseFloat(cuotaTotal.toFixed(2))).toBe(3.6);
+    mockSupabase._setThenResult([
+      { id: 1, evento_deportivo_id: 10, cuota: '2.0' },
+      { id: 2, evento_deportivo_id: 11, cuota: '1.8' },
+    ]);
+    const result = await queryService.obtenerApuestaPorId(99, 1);
+    expect(result.cuotaTotal).toBe(3.6);
+    expect(result.selecciones.map((item) => item.cuota)).toEqual([2, 1.8]);
   });
 
   // ── CASO 20: estadísticas — usuario sin apuestas ──────────────────────────
   it('obtenerEstadisticas() debe retornar tasaExito=0 y totalApuestas=0 para usuario nuevo', async () => {
     mockSupabase._setThenResult([], null);
 
-    const stats = await service.obtenerEstadisticas(999);
+    const stats = await queryService.obtenerEstadisticas(999);
 
     expect(stats.totalApuestas).toBe(0);
     expect(stats.tasaExito).toBe(0);
@@ -138,7 +109,7 @@ describe('ApuestasDeportivasService — Pruebas Unitarias', () => {
 
     mockSupabase._setThenResult(apuestasData, null);
 
-    const stats = await service.obtenerEstadisticas(1);
+    const stats = await queryService.obtenerEstadisticas(1);
 
     expect(stats.totalApuestas).toBe(4);
     expect(stats.apuestasGanadas).toBe(2);

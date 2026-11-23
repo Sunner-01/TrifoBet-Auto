@@ -55,20 +55,19 @@ describe('AuthModule (e2e)', () => {
   // ── CASO 1: Registro → Login → /auth/me ─────────────────────────────────
   it('/auth/register (POST) y /auth/login (POST) flujo completo', async () => {
     // 1. Register (no existe, luego crea)
-    mockSupabase.single
-      .mockResolvedValueOnce({ data: null, error: { message: 'No rows' } })
-      .mockResolvedValueOnce({ data: mockUser, error: null });
+    mockSupabase._setThenResult([]);
+    mockSupabase.single.mockResolvedValueOnce({ data: mockUser, error: null });
 
     const resRegister = await request(app.getHttpServer())
       .post('/auth/register')
       .send({
-        nombre: 'E2E',
+        nombre: 'Prueba',
         apellido1: 'User',
         ci: '12312312',
         fechaNacimiento: '2000-01-01',
         nombreUsuario: 'e2eUser',
         correo: 'e2e@trifobet.com',
-        contrasena: 'password',
+        contrasena: 'Pass123!',
       });
     expect(resRegister.status).toBe(201);
 

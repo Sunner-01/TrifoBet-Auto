@@ -33,7 +33,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
 
   const handleLogout = () => {
     sessionStorage.clear()
-    window.location.href = '/'
+    window.location.href = '/admin'
   }
 
   return (

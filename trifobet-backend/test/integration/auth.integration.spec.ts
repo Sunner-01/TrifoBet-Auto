@@ -64,6 +64,12 @@ describe('Auth — Pruebas de Integración', () => {
     await app.close();
   });
 
+  beforeEach(() => {
+    mockSupabase.single.mockReset().mockResolvedValue({ data: null, error: null });
+    mockSupabase._setThenResult([]);
+    (bcrypt.hash as jest.Mock).mockResolvedValue('$hashed$');
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
     (createClient as jest.Mock).mockReturnValue(mockSupabase);
@@ -72,10 +78,7 @@ describe('Auth — Pruebas de Integración', () => {
 
   // ── CASO 1: POST /auth/register — éxito ──────────────────────────────────
   it('POST /auth/register debe retornar 201 con token y datos del usuario', async () => {
-    // No existe
-    mockSupabase.single
-      .mockResolvedValueOnce({ data: null, error: { message: 'No rows' } })
-      .mockResolvedValueOnce({ data: mockUser, error: null });
+    mockSupabase.single.mockResolvedValueOnce({ data: mockUser, error: null });
 
     const response = await request(app.getHttpServer())
       .post('/auth/register')
@@ -86,7 +89,7 @@ describe('Auth — Pruebas de Integración', () => {
         fechaNacimiento: '1995-06-15',
         nombreUsuario: 'integrationUser',
         correo: 'integration@trifobet.com',
-        contrasena: 'password123',
+        contrasena: 'Pass123!',
         paisCodigo: 'BO',
       });
 

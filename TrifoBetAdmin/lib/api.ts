@@ -2,7 +2,9 @@
 // Cliente centralizado para comunicación con el backend NestJS
 
 export const API_URL = typeof window !== 'undefined'
-  ? `${window.location.protocol}//${window.location.hostname}:3100`
+  ? (window.location.port
+      ? `${window.location.protocol}//${window.location.hostname}:3100`
+      : `${window.location.origin}/api`)
   : (process.env.INTERNAL_API_URL || 'http://backend:3000')
 
 function getToken(): string | null {
@@ -27,7 +29,7 @@ async function request<T>(
     if (res.status === 401 && typeof window !== 'undefined') {
       sessionStorage.removeItem('admin_token')
       sessionStorage.removeItem('admin_user')
-      window.location.href = '/'
+      window.location.href = '/admin'
     }
     const err = await res.json().catch(() => ({ message: 'Error desconocido' }))
     throw new Error(err.message || `Error ${res.status}`)

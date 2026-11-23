@@ -37,7 +37,7 @@ export function LiveChat() {
 
       setIsConnecting(true)
       
-      const newSocket = io(`${API_Back_Url}/chat`, {
+      const newSocket = io(`${API_Back_Url.replace(/\/api$/, '')}/chat`, {
         auth: { token }
       })
 

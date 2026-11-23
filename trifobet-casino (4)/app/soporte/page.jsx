@@ -36,7 +36,7 @@ export default function SoportePage() {
     const token = localStorage.getItem("token")
     if (token) {
       const baseUrl = API_Back_Url
-      const newSocket = io(`${baseUrl}/soporte`, {
+      const newSocket = io(`${baseUrl.replace(/\/api$/, '')}/soporte`, {
         auth: { token: `Bearer ${token}` }
       })
       

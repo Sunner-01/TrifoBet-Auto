@@ -48,7 +48,7 @@ export default function SoportePage() {
     const token = sessionStorage.getItem("admin_token")
     if (token) {
       const baseUrl = API_URL
-      const newSocket = io(`${baseUrl}/soporte`, {
+      const newSocket = io(`${baseUrl.replace(/\/api$/, '')}/soporte`, {
         auth: { token: `Bearer ${token}` }
       })
       

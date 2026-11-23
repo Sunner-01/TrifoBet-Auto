@@ -63,7 +63,10 @@ describe('BlackjackGateway (e2e)', () => {
 
     // Token JWT real firmado con el secreto de pruebas
     const jwtService = moduleFixture.get<JwtService>(JwtService);
-    jwtToken = jwtService.sign({ sub: '1', username: 'wsUser' });
+    jwtToken = jwtService.sign(
+      { sub: '1', username: 'wsUser' },
+      { secret: process.env.JWT_SECRET },
+    );
 
     const url = await app.getUrl();
 
@@ -94,8 +97,8 @@ describe('BlackjackGateway (e2e)', () => {
   }, 20000);
 
   afterAll(async () => {
-    socket.disconnect();
-    await app.close();
+    socket?.disconnect();
+    await app?.close();
   });
 
   afterEach(() => jest.clearAllMocks());

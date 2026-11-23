@@ -8,18 +8,12 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
-import { createClient } from '@supabase/supabase-js';
-import * as bcrypt from 'bcrypt';
 
 import { AuthService } from '../../src/auth/auth.service';
+import { UsuariosService } from '../../src/auth/usuarios.service';
+import { PasswordService } from '../../src/auth/password.service';
 import { RegisterDto } from '../../src/auth/dto/register.dto';
-import { createMockSupabaseClient } from '../helpers/supabase.mock';
-
-// ── Hoist mocks antes que cualquier import real ────────────────────────────
-jest.mock('@supabase/supabase-js');
-jest.mock('bcrypt');
 
 // ── Datos de prueba reutilizables ──────────────────────────────────────────
 const mockUser = {
@@ -50,13 +44,25 @@ const registerDto: RegisterDto = {
 // ── Suite de pruebas ───────────────────────────────────────────────────────
 describe('AuthService — Pruebas Unitarias', () => {
   let service: AuthService;
-  let mockSupabase: ReturnType<typeof createMockSupabaseClient>;
+  let mockUsers: {
+    checkUserExists: jest.Mock; createUser: jest.Mock; findByIdentifier: jest.Mock;
+    findById: jest.Mock; findByUsername: jest.Mock;
+  };
+  let mockPasswords: { hashPassword: jest.Mock; comparePassword: jest.Mock };
   let mockJwtService: jest.Mocked<JwtService>;
 
   beforeEach(async () => {
-    // createClient devuelve nuestro mock controlado
-    mockSupabase = createMockSupabaseClient();
-    (createClient as jest.Mock).mockReturnValue(mockSupabase);
+    mockUsers = {
+      checkUserExists: jest.fn().mockResolvedValue(false),
+      createUser: jest.fn().mockResolvedValue(mockUser),
+      findByIdentifier: jest.fn().mockResolvedValue({ user: mockUser, error: null }),
+      findById: jest.fn().mockResolvedValue(mockUser),
+      findByUsername: jest.fn().mockResolvedValue(mockUser),
+    };
+    mockPasswords = {
+      hashPassword: jest.fn().mockResolvedValue('$hashed$'),
+      comparePassword: jest.fn().mockResolvedValue(true),
+    };
 
     mockJwtService = {
       sign: jest.fn().mockReturnValue('mock.jwt.token'),
@@ -67,44 +73,34 @@ describe('AuthService — Pruebas Unitarias', () => {
       providers: [
         AuthService,
         { provide: JwtService, useValue: mockJwtService },
-        {
-          provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue('test-value') },
-        },
+        { provide: UsuariosService, useValue: mockUsers },
+        { provide: PasswordService, useValue: mockPasswords },
       ],
     }).compile();
 
     service = module.get<AuthService>(AuthService);
-    // Reemplazamos supabase del servicio con nuestro mock controlado
-    (service as any).supabase = mockSupabase;
   });
 
   afterEach(() => jest.clearAllMocks());
 
   // ── CASO 1: register — usuario ya existe ────────────────────────────────
   it('register() debe lanzar BadRequestException si el usuario ya existe', async () => {
-    // El primer .single() devuelve un usuario existente
-    mockSupabase.single.mockResolvedValue({ data: { id: 99 }, error: null });
+    mockUsers.checkUserExists.mockResolvedValue(true);
 
     await expect(service.register(registerDto)).rejects.toThrow(
       BadRequestException,
     );
     await expect(service.register(registerDto)).rejects.toThrow(
-      'El nombre de usuario o email ya está en uso',
+      'ya están registrados',
     );
   });
 
   // ── CASO 2: register — éxito ─────────────────────────────────────────────
   it('register() debe crear usuario y retornar token JWT', async () => {
-    // No existe → crea exitosamente
-    mockSupabase.single
-      .mockResolvedValueOnce({ data: null, error: { message: 'No rows' } })
-      .mockResolvedValueOnce({ data: mockUser, error: null });
-
-    (bcrypt.hash as jest.Mock).mockResolvedValueOnce('$hashed$');
-
     const result = await service.register(registerDto);
 
+    expect(mockPasswords.hashPassword).toHaveBeenCalledWith(registerDto.contrasena);
+    expect(mockUsers.createUser).toHaveBeenCalledWith(registerDto, '$hashed$');
     expect(result).toHaveProperty('token', 'mock.jwt.token');
     expect(result).toHaveProperty('message', 'Usuario registrado exitosamente');
     expect(result.user).toMatchObject({
@@ -115,10 +111,7 @@ describe('AuthService — Pruebas Unitarias', () => {
 
   // ── CASO 3: login — usuario no encontrado ────────────────────────────────
   it('login() debe lanzar UnauthorizedException si el usuario no existe', async () => {
-    // Ambas búsquedas (por username y correo) fallan
-    mockSupabase.single
-      .mockResolvedValueOnce({ data: null, error: { message: 'No rows' } })
-      .mockResolvedValueOnce({ data: null, error: { message: 'No rows' } });
+    mockUsers.findByIdentifier.mockResolvedValue({ user: null, error: null });
 
     await expect(service.login('noexiste', 'pass123')).rejects.toThrow(
       UnauthorizedException,
@@ -127,8 +120,7 @@ describe('AuthService — Pruebas Unitarias', () => {
 
   // ── CASO 4: login — contraseña incorrecta ────────────────────────────────
   it('login() debe lanzar UnauthorizedException si la contraseña es incorrecta', async () => {
-    mockSupabase.single.mockResolvedValueOnce({ data: mockUser, error: null });
-    (bcrypt.compare as jest.Mock).mockResolvedValueOnce(false);
+    mockPasswords.comparePassword.mockResolvedValue(false);
 
     await expect(service.login('testuser', 'wrongpassword')).rejects.toThrow(
       UnauthorizedException,
@@ -137,9 +129,6 @@ describe('AuthService — Pruebas Unitarias', () => {
 
   // ── CASO 5: login — éxito ────────────────────────────────────────────────
   it('login() debe retornar access_token y datos del usuario en login exitoso', async () => {
-    mockSupabase.single.mockResolvedValueOnce({ data: mockUser, error: null });
-    (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
-
     const result = await service.login('testuser', 'password123');
 
     expect(result).toHaveProperty('access_token', 'mock.jwt.token');

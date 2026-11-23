@@ -1,0 +1,81 @@
+name: TrifoBet - pruebas en dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unitarias, integración y E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: trifobet-backend
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v6
+      - name: Preparar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: trifobet-backend/package-lock.json
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Compilar backend
+        run: npm run build
+      - name: Pruebas unitarias
+        run: npx jest --config ./test/jest.config.js --testMatch '**/test/unit/**/*.spec.ts' --runInBand --json --outputFile=unit-results.json
+      - name: Pruebas de integración
+        run: npx jest --config ./test/jest.config.js --testMatch '**/test/integration/**/*.spec.ts' --runInBand --json --outputFile=integration-results.json
+      - name: Pruebas E2E HTTP y WebSocket
+        run: npx jest --config ./test/jest.config.js --testMatch '**/test/e2e/**/*.e2e-spec.ts' --runInBand --json --outputFile=e2e-results.json
+      - name: Exigir al menos 15 casos por categoría
+        run: |
+          node - <<'NODE'
+          for (const kind of ['unit', 'integration', 'e2e']) {
+            const result = require(`./${kind}-results.json`);
+            console.log(`${kind}: ${result.numPassedTests} aprobadas de ${result.numTotalTests}`);
+            if (!result.success || result.numPassedTests < 15) process.exitCode = 1;
+          }
+          NODE
+      - name: Guardar resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trifobet-test-results
+          path: trifobet-backend/*-results.json
+          if-no-files-found: ignore
+
+  frontend-build:
+    name: Compilar ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - name: web
+            path: trifobet-casino (4)
+          - name: admin
+            path: TrifoBetAdmin
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ${{ matrix.path }}/pnpm-lock.yaml
+      - name: Instalar dependencias
+        working-directory: ${{ matrix.path }}
+        run: pnpm install --frozen-lockfile
+      - name: Compilar Next
+        working-directory: ${{ matrix.path }}
+        run: pnpm exec next build --webpack

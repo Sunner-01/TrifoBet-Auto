@@ -132,6 +132,11 @@ $RECYCLE.BIN/
 # VERCEL / DEPLOY
 # ========================
 .vercel/
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+trifobet-backend/*-results.json
 
 # ========================
 # DATOS LOCALES Y SCRATCH
